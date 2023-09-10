@@ -1,0 +1,3 @@
+[submodule "traitdb"]
+	path = traitdb
+	url = https://github.com/dmscramjet/stt-fbb-trait-sets.git
