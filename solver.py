@@ -128,7 +128,7 @@ class Solver():
         for node in self._chain:
             if not node.solved:
                 poss_tsets.append(node.poss_tsets)
-                istart.append(len(node.given_traits))
+                istart.append(len(node.known_traits))
             # else:
             #     poss_tsets = tuple(node.traits[-len(node.given_traits):])
             #     istart.append(len(node.given_traits))
@@ -139,6 +139,7 @@ class Solver():
         if made_changes:  # the solution checked eliminated some trait sets, but did it actually simplify?
             made_changes = self._chain.update(valid_solns)
 
+        return False
         return made_changes
     
     def _generate_all_combinations(self, poss_tsets:list[list[tuple[str]]], istart:list[int])->list:
@@ -169,21 +170,28 @@ class Solver():
             
             # now check for validity
             for trait in cnt:
-                if check_req_traits:
-                    # if req'd, must use all
-                    if trait in req_traits:
-                        if cnt[trait] != req_traits[trait]:
-                            made_changes = True
-                            keep = False
-                            break
+                if check_req_traits and trait in req_traits:
+                    if cnt[trait] != req_traits[trait]:
+                        made_changes = True
+                        keep = False
+                        break
                 # not required, either 0/1 occurrences is valid
                 elif trait not in req_traits and cnt[trait] > 1:
                     keep = False
                     made_changes = True
                     break
-                
+        
             if keep:
                 valid_solns.append(soln)
+        
+        if not valid_solns:
+            print('Required Traits:')
+            print(self._chain.req_traits)
+            print('\nPossible trait sets per node:', end='')
+            for i,node in enumerate(self._chain,start=1):
+                node.print(i, self._trait_translation)
+                print(node.poss_tsets)
+            raise RuntimeError('Could not find any solutions for this chain!')
 
         # nothing eliminated, we're done
         if not made_changes:
@@ -201,6 +209,10 @@ class Solver():
             for given, hidden in zip(given_traits, soln):
                 this_full_soln.append(tuple(given,)+hidden)
             valid_full_solns.append(this_full_soln)
+        
+        print(req_traits)
+        for sol in valid_full_solns:
+            print(sol)
 
         return valid_full_solns, made_changes
 
@@ -358,7 +370,9 @@ class Solver():
             if node.force_print:
                 print( '1. ' + ', '.join(self._traitdb[tuple(node.traits)]))
 
-            spc = ' ' if len(crew_and_trait_dict) > 9 else ''
+            #spc = ' ' if len(crew_and_trait_dict) > 9 else ''
+            # ^^ messes with Discord
+            spc = '' if len(crew_and_trait_dict) > 9 else ''
             # sort crew by decreasing # of matching solutions
             for i,traits in enumerate(sorted(crew_and_trait_dict, key=lambda k:crew_and_trait_dict[k][0], reverse=True),start=1):
                 if i == 10:

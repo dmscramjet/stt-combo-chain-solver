@@ -63,7 +63,7 @@ class Node():
         print('')
         #print(f'Node {inode} - ' + ('Partial Solution - ' if (self._iknown_lexico<-1 and '?' in self.hidden_traits) else ''), end='[' + ', '.join([tt[x] for x in self.known_traits]) if self.known_traits else '')
         print(f'Node {inode} - [' + ', '.join([tt[x] for x in self.given_traits]) + ']', end='')
-        for trait in self._traits[self._iknown_lexico:]:
+        for trait in self._traits[self.nknown:]:
             translated_trait = trait if trait == '?' else tt[trait]
             print(' + ' + translated_trait, end='')
         print('')
