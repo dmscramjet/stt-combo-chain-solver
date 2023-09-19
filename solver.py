@@ -32,7 +32,7 @@ class Solver():
         self._poss_solutions:list[list] = []
         self._node_solutions:list[str] = []
         self.niters:int = 0
-        self.maxiters:int = 10
+        self.maxiters:int = 25
         self.nportal:(tuple) = (min_portal, max_portal)
         self._load_trait_translation()
 
@@ -59,7 +59,7 @@ class Solver():
             self._trait_translation = json.load(f)
         self._trait_translation = self._trait_translation['trait_names']
     
-    def solve(self, att_crew:list[str]=[], verbose=False):
+    def solve(self, att_crew:list[str]=[], verbose:bool=False):
         """solve the combo chain
         """
 
@@ -82,30 +82,22 @@ class Solver():
                     node.print(i, self._trait_translation)
                     print(node.poss_tsets)
             keep_going |= self._check_against_traitdb(verbose=verbose)
-            if verbose: print('\n-----\njust checked against trait db')
+            if verbose: print('-----\njust checked against trait db\n')
 
             keep_going |= self._analyze_required_traits(verbose=verbose)
-            if verbose: print('\n-----\njust analyzed required traits')
+            if verbose: print('-----\njust analyzed required traits\n')
             
             keep_going |= self._check_nodes_for_guaranteed_traits(verbose=verbose)
-            if verbose: print('\n-----\njust checked for guaranteed to be used traits')
+            if verbose: print('-----\njust checked for guaranteed to be used traits\n')
 
             if not keep_going:
-                if verbose: print('\n-----\nchecking full solutions!')
-                keep_going |= self._check_full_solutions()
+                if verbose: print('-----\nchecking full solutions!\n')
+                keep_going |= self._check_full_solutions(verbose=verbose)
 
             self.niters += 1
             if self.niters > self.maxiters:
                 print(f'\nIteration #{self.niters}')
                 break
-            else:
-                pass
-                #self._check_against_traitdb()
-                #for i,node in enumerate(chain,start=1):
-                #    node.print(i, self._trait_translation)
-                #    print(node.poss_tsets)
-
-                # maybe rebuild poss traits and tsets here for next round?
         
         print('\nDone solving. Finding matching crew...')
         self._build_crew_lists()
@@ -117,29 +109,49 @@ class Solver():
         self.print_settings(att_crew)
         self.print_solution()
     
-    def _check_full_solutions(self)->bool:
+    def _check_full_solutions(self, verbose:bool=False)->bool:
         """
         Check for consistency of possible trait sets across all nodes
         """
+
+        ###
+        # NEED TO DECIDE IF IT'S BETTER TO CHECK FULL SOLUTIONS
+        # INCLUDING ALL NODE HIDDEN TRAITS (EVEN IF SOLVED FOR)
+        # that's better for checking the whole solution
+        # or just the unknown traits, which is easier to check all the required traits
+        # are used the right # of times since they are often already set by an earlier
+        # check for just required traits
+
+        # I think go only with unknown traits as that should match hidden traits which 
+        # should match poss_tsets, since this is only called after every other check made
+        # no changes. although shoudl probably force update the hidden trait and poss_tsets
+        # lists first!
+
+        # Can't go with only unknown traits as they may not be in alphabetical order and
+        # then that breaks the recursive generation of the solution sets since the 
+        # "solved" trait is not always at the same index
+        # so generate combinations of all hidden traits and then figure out how to handle
+        # the required trait counting later!
+
+        # similarly have to add in all the solved node poss_tsets so that the full required traits
+        # section of the solve sees that they are used in the solved nodes
+
         made_changes = False
 
         poss_tsets = []
         istart = []
         for node in self._chain:
-            if not node.solved:
-                poss_tsets.append(node.poss_tsets)
-                istart.append(len(node.known_traits))
-            # else:
-            #     poss_tsets = tuple(node.traits[-len(node.given_traits):])
-            #     istart.append(len(node.given_traits))
+            poss_tsets.append(node.poss_tsets)
+            istart.append(len(node.given_traits))
         
         # now we have all the poss tsets in a nicely iterable data structure (list of lists)
+        if verbose: print(' generating all solution combinations')
         combs = self._generate_all_combinations(poss_tsets, istart)
-        valid_solns, made_changes = self._check_solutions(combs)
+        if verbose: print(' checking all solution combinations for validity')
+        valid_solns, made_changes = self._check_solutions(combs, verbose)
         if made_changes:  # the solution checked eliminated some trait sets, but did it actually simplify?
-            made_changes = self._chain.update(valid_solns)
+            made_changes = self._chain.soln_set_update(valid_solns)
 
-        return False
         return made_changes
     
     def _generate_all_combinations(self, poss_tsets:list[list[tuple[str]]], istart:list[int])->list:
@@ -148,7 +160,7 @@ class Solver():
         generate_combinations(poss_tsets, potential_solns, istart, 0, curr)
         return potential_solns
     
-    def _check_solutions(self, potential_solns:list[str])->list[str]:
+    def _check_solutions(self, potential_solns:list[str], verbose:bool=False)->list[str]:
         """validate a list of potential solutions against the chain's required and hidden traits 
 
         Args:
@@ -159,7 +171,9 @@ class Solver():
         """
         made_changes = False
         valid_solns = []
-        req_traits = self._chain.req_traits
+
+        req_traits = self._chain.modified_req_traits(verbose)
+
         check_req_traits = sum(req_traits.values()) > 0
         for soln in potential_solns:
             keep = True
@@ -192,28 +206,26 @@ class Solver():
                 node.print(i, self._trait_translation)
                 print(node.poss_tsets)
             raise RuntimeError('Could not find any solutions for this chain!')
+        elif verbose:
+            print(f'Reduced {len(potential_solns)} potential solutions to {len(valid_solns)}')
 
         # nothing eliminated, we're done
         if not made_changes:
             return potential_solns, made_changes
 
-        # add back the given traits for a full tset
-        given_traits = []
+        # add back the known traits for a full tset
+        known_traits = []
         for node in self._chain:
             if not node.solved:
-                given_traits.append(node.given_traits)
+                known_traits.append(node.given_traits)
         
         valid_full_solns = []
         for soln in valid_solns:
             this_full_soln = []
-            for given, hidden in zip(given_traits, soln):
-                this_full_soln.append(tuple(given,)+hidden)
+            for known, hidden in zip(known_traits, soln):
+                this_full_soln.append(tuple(known,)+hidden)
             valid_full_solns.append(this_full_soln)
         
-        print(req_traits)
-        for sol in valid_full_solns:
-            print(sol)
-
         return valid_full_solns, made_changes
 
     def _check_against_traitdb(self, verbose:bool=False):
@@ -233,10 +245,10 @@ class Solver():
                     node_changed = True
             if node_changed:
                 if verbose:
-                    print('Based on traitDB lookup, removing the following trait sets:')
+                    print('\nBased on traitDB lookup, removing the following trait sets:')
                     print(tsets_to_remove)
                 node.poss_tsets = [t for t in node.poss_tsets if t not in tsets_to_remove]
-                # rebuild the poss_traits
+                # rebuild the poss_traits from the new poss_tsets
                 made_changes = True
                 node.update_poss_traits()
         
@@ -259,7 +271,7 @@ class Solver():
                         # traits is a list of the traits in this set
                         traits = [t for t in traits if t not in node.known_traits]
                         # now traits only contains the matching hidden traits
-                        # add to this poss_crew's trait list
+                        # add to this poss_crew's trait list and counter
                         if crew in poss_crew:
                             num_tsets, set_of_matching_traits = poss_crew[crew]
                             num_tsets += 1
@@ -275,7 +287,9 @@ class Solver():
             if node.solved:
                 continue
             opt_crew = {}
+            #print(crew_traits_dict,end='\n\n')
             for crew, traits_count_and_set in crew_traits_dict.items():
+                # make a frozenset (hashable) of just the traits
                 key = frozenset(traits_count_and_set[1])
                 if key in opt_crew:
                     opt_crew[key].append(crew)
@@ -283,12 +297,12 @@ class Solver():
                     opt_crew[key] = [traits_count_and_set[0], crew]
         
             trait_lists = list(opt_crew.keys())
-            for keys in trait_lists:
-                # loop over the trait sets again to compare
-                for keys2 in trait_lists:
-                    if keys < keys2:
-                    #if keys.strip('[]').split(',')[1] < keys2.strip('[]').split(',')[1]:  # strict subset, so will not delete itself
-                        del opt_crew[keys]
+            for trait_set in trait_lists:
+                # loop over the trait sets again to check against each other for subsets
+                for trait_set2 in trait_lists:
+                    # strict subset check to not delete itself
+                    if trait_set < trait_set2:
+                        del opt_crew[trait_set]
                         break  # key is deleted, move on to next tset in outer loop
 
             self._chain[node] = opt_crew
@@ -298,10 +312,12 @@ class Solver():
         req_traits_solved = []
         for req_trait, num_uses in self._chain.req_traits.items():
             # check which nodes have this trait in the poss_traits
-            req_trait_by_node = [False]*len(self._chain)
+            req_trait_by_node = []
             for node in self._chain:
                 if req_trait in node:
-                    req_trait_by_node[node.id] = True
+                    req_trait_by_node.append(True)
+                else:
+                    req_trait_by_node.append(False)
             
             # now analyze full chain
             if num_uses>0 and req_trait_by_node.count(True) == num_uses:
@@ -313,7 +329,8 @@ class Solver():
                     if modify:
                         chain_updated = True
                         if node.set_trait(req_trait):
-                            # node was just solved
+                            # node was just solved if we are in this branch, so 
+                            # process the chain by removing these traits
                             traits_to_remove = node[node.nknown:]
                             self._chain.remove_set_traits(traits_to_remove)
         
@@ -341,8 +358,9 @@ class Solver():
                     if trait not in tset:
                         break
                 else:
-                    print(f'{node} must use {trait} given this list of possible trait sets:')
-                    print(f'{node.poss_tsets}')
+                    if verbose:
+                        print(f'{node} must use {trait} given this list of possible trait sets:')
+                        print(f'{node.poss_tsets}')
                     node.set_trait(trait)
                     chain_updated = True
                     set_traits.append(trait)

@@ -6,13 +6,12 @@ class Node():
         self.id = id  # use id to ensure the hashing is unique
         self._traits:list = node['open_traits'].copy()
         self._traits.extend(node['hidden_traits'])
-        self._nunknown:int = len(node['hidden_traits'])
-        self.nknown:int = len(node['open_traits'])  # track both because _nunknown changes as node is solved
-        self.solved:bool = False if '?' in self._traits else True
+        self.nunknown:int = len(node['hidden_traits'])
+        self.ngiven:int = len(node['open_traits'])  # track both because nunknown changes as node is solved
         self.poss_tsets = None if self.solved else []
         self.poss_traits = None if self.solved else set()
         self.force_print:bool = False
-        self._iknown_lexico:int = -1  # index into known traits of element which determines lexicographical ordering
+        self._ind_lexico:int = self.ngiven-1  # index into traits of element which determines lexicographical ordering
     
     def __hash__(self):
         return hash(str(self.id) + str(self.given_traits))
@@ -38,16 +37,20 @@ class Node():
         return self._traits[idx]
 
     @property
-    def hidden_traits(self):
-        return self._traits[len(self.traits)-self._nunknown:]
+    def solved(self):
+        return False if '?' in self._traits else True
+
+    @property
+    def unknown_traits(self):
+        return self._traits[-self.nunknown:]
     
     @property
     def known_traits(self):
-        return self._traits[:len(self.traits)-self._nunknown]
+        return self._traits[:-self.nunknown]
     
     @property
     def given_traits(self):
-        return self._traits[:self.nknown]
+        return self._traits[:self.ngiven]
     
     @property
     def traits(self):
@@ -63,7 +66,7 @@ class Node():
         print('')
         #print(f'Node {inode} - ' + ('Partial Solution - ' if (self._iknown_lexico<-1 and '?' in self.hidden_traits) else ''), end='[' + ', '.join([tt[x] for x in self.known_traits]) if self.known_traits else '')
         print(f'Node {inode} - [' + ', '.join([tt[x] for x in self.given_traits]) + ']', end='')
-        for trait in self._traits[self.nknown:]:
+        for trait in self._traits[self.ngiven:]:
             translated_trait = trait if trait == '?' else tt[trait]
             print(' + ' + translated_trait, end='')
         print('')
@@ -78,9 +81,9 @@ class Node():
         self.poss_traits = set()
         
         # handle 1 unknown trait and 2 unknown traits differently
-        if self._nunknown == 1:
+        if self.nunknown == 1:
             self._add_1unknown_poss_tsets(hidden_traits, lexico)
-        elif self._nunknown == 2:
+        elif self.nunknown == 2:
             self._add_2unknown_poss_tsets(hidden_traits, lexico)
         
         # clean up the poss traits set
@@ -98,7 +101,7 @@ class Node():
                 used_traits.append(trait)
             if lexico:
                 # str does lexicographical comparison by default
-                if trait < self.known_traits[self._iknown_lexico]:
+                if trait < self.traits[self._ind_lexico]:
                     continue
             tset = self.known_traits.copy()
             tset.append(trait)
@@ -114,7 +117,7 @@ class Node():
                 if trait1 == trait2:
                     continue  # no crew has duped traits
                 if lexico:
-                    if trait1 < self.known_traits[self._iknown_lexico] or trait2 < self.known_traits[self._iknown_lexico]:
+                    if trait1 < self.traits[self._ind_lexico] or trait2 < self.traits[self._ind_lexico]:
                         continue
                 tset = self.known_traits.copy()
                 tset.extend([trait1, trait2])
@@ -146,7 +149,6 @@ class Node():
             del self.poss_tsets[iset]
     
     def set_solved(self, tset:tuple):
-        self.solved = True
         self.force_print = True
         ind = 0
         for itrait, trait in enumerate(self._traits):
@@ -162,21 +164,19 @@ class Node():
         for itrait, trait in enumerate(self._traits):
             if trait == '?':
                 self._traits[itrait] = trait_to_set
-                self._nunknown -= 1
+                self.nunknown -= 1
 
-                if self._nunknown > 0:
-                    # move the lexicographical pointer since the other trait need not come after this trait
-                    self._iknown_lexico -= 1
-                else:
+                if self.nunknown == 0:
                     self.set_solved(self._traits)
-                    set_solved = True
 
                 return set_solved
 
+# REVISIT IF POSS TRAITS SHOULD INCLUDE/EXCLUDE A TRAIT THAT WE KNOW MUST BE USED
+# BUT IS NOT SOVED YET
     def update_poss_traits(self):
         poss_traits = set()
         for tset in self.poss_tsets:
-            poss_traits.update(tset[-self._nunknown:])
+            poss_traits.update(tset[-self.nunknown:])
         self.poss_traits = list(poss_traits)
 
 
@@ -226,6 +226,7 @@ class ComboChain():
         for i,node in enumerate(self._json['nodes']):
             self._nodes[Node(node, i)] = []  # initialize value to empty list of crew
             if len(node)>2:
+                # there's extra data here which means the node is solved
                 self.solution_ids.append(node['unlocked_crew_archetype_id']) 
 
     def _get_required_traits(self):
@@ -236,22 +237,21 @@ class ComboChain():
         
         req_traits = []
         # loop over all the hidden traits and gather the dupes
-        for trait in hid_traits:
-            if hid_traits.count(trait) > 1:
-                req_traits.append(trait)
+        cnt = Counter(hid_traits)
+        for trait in cnt:
+            if cnt[trait] > 1:
+                req_traits.extend([trait]*cnt[trait])
             elif trait in vis_traits:
                 req_traits.append(trait)
         
         # mark off the ones already used
         for node in self._nodes:
-            for used_trait in node.hidden_traits:
+            for used_trait in node.unknown_traits:
                 if used_trait in req_traits:
                     req_traits.remove(used_trait)
 
         # store counts in the dict
-        for trait in req_traits:
-            if trait not in self.req_traits:
-                self.req_traits[trait] = req_traits.count(trait)
+        self.req_traits = Counter(req_traits)
         
     def _get_hidden_traits(self, keep_used:bool=False):
         self._hidden_traits = self._json['traits'].copy()
@@ -283,6 +283,11 @@ class ComboChain():
             new_hid_traits.extend([trait]*list_cnt[trait])
         
         self._hidden_traits = new_hid_traits
+
+        return
+        
+        # IT SEEMS LIKE WE SHOUD DO THIS STUFF LATER OR IN ANOTHER FUNCTION
+        # THAT JUST UPDATES A NODE/CHAIN FROM THE HIDDEN TRAIT LIST
         
         # now poll the nodes to see if poss_tsets can be eliminated
         for trait in trait_list:
@@ -308,7 +313,16 @@ class ComboChain():
                     node.poss_traits = [ t  for t in node.poss_traits if t not in traits_to_remove ]
                     node.poss_tsets = [ t  for t in node.poss_tsets if t not in tsets_to_remove ]
     
-    def update(self, solutions:[list[tuple[tuple[str]]]])->bool:
+    def soln_set_update(self, solutions:[list[tuple[tuple[str]]]])->bool:
+        """Given a list of possible solutions, check if this actually changes the possible trait sets for each node
+           across the whole chain
+
+        Args:
+            solutions (list[tuple[tuple[str]]]]):  set of possible full solutions
+
+        Returns:
+            bool: whether or not this set of solutions actually simplified the chain
+        """
         inode = 0
         reduced_poss_tsets = False
         for node in self._nodes:
@@ -326,3 +340,29 @@ class ComboChain():
             reduced_poss_tsets |= any(diff)
         
         return reduced_poss_tsets
+    
+    def modified_req_traits(self, verbose:bool=False)->Counter:
+        """Return a modified set of required traits that includes the already "solved" traits
+           (i.e. deduced by solver not actually run yet) for the full solution check        
+
+        Args:
+            verbose (bool, optional): Turn on verbose output. Defaults to False.
+
+        Returns:
+            Counter: collection with required traits as keys and required number of uses as values
+        """
+        req_traits = self.req_traits.copy()
+        if verbose: print(' Creating modified required traits for full solution check')
+
+        for node in self._nodes:
+            if len(node) - node.ngiven == node.nunknown:
+                # this node will not modify the required traits distribution
+                continue
+            
+            traits = node.traits[node.ngiven:]
+            for trait in traits:
+                if trait in req_traits:
+                    if verbose: print(f' {trait} is required, adding back to counter!')
+                    req_traits.update({trait:1})
+
+        return req_traits
